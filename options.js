@@ -1,24 +1,19 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const seekSlider = document.getElementById('seekSeconds');
-  const valDisplay = document.getElementById('valDisplay');
-  const saveBtn = document.getElementById('saveBtn');
-  const status = document.getElementById('status');
-
+  const s = document.getElementById('s');
+  const v = document.getElementById('v');
+  const b = document.getElementById('b');
   const storage = chrome.storage.sync || chrome.storage.local;
 
   storage.get({ seekSeconds: 10 }, (res) => {
-    seekSlider.value = res.seekSeconds;
-    valDisplay.textContent = res.seekSeconds;
+    s.value = res.seekSeconds;
+    v.textContent = res.seekSeconds;
   });
 
-  seekSlider.addEventListener('input', () => {
-    valDisplay.textContent = seekSlider.value;
-  });
-
-  saveBtn.addEventListener('click', () => {
-    storage.set({ seekSeconds: parseInt(seekSlider.value, 10) }, () => {
-      status.textContent = 'Saved successfully!';
-      setTimeout(() => { status.textContent = ''; }, 2000);
+  s.addEventListener('input', () => { v.textContent = s.value; });
+  b.addEventListener('click', () => {
+    storage.set({ seekSeconds: parseInt(s.value, 10) }, () => {
+      b.textContent = 'Saved!';
+      setTimeout(() => { b.textContent = 'Save'; }, 1500);
     });
   });
 });
