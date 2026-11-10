@@ -1,80 +1,137 @@
 (function () {
   let seekSeconds = 10;
 
-  // Load configured seek interval
+  // Retrieve saved seek interval
   const storage = chrome.storage.sync || chrome.storage.local;
   storage.get({ seekSeconds: 10 }, (res) => {
-    if (res && res.seekSeconds) {
-      seekSeconds = parseInt(res.seekSeconds, 10);
-    }
+    if (res && res.seekSeconds) seekSeconds = parseInt(res.seekSeconds, 10);
   });
-
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.seekSeconds) {
-      seekSeconds = parseInt(changes.seekSeconds.newValue, 10);
-    }
+    if (changes.seekSeconds) seekSeconds = parseInt(changes.seekSeconds.newValue, 10);
   });
 
-  // Track touch state
+  // State trackers
   let touchStartData = null;
   let lastTap = { time: 0, x: 0, y: 0 };
+  let wasPlayingOnFirstTap = false;
+  let suppressNextClick = false;
 
-  // Finds any visible <video> element occupying the given screen coordinates
-  function findVideoAtPoint(x, y) {
-    const videos = Array.from(document.querySelectorAll('video'));
-    for (const video of videos) {
-      const rect = video.getBoundingClientRect();
-      if (
-        x >= rect.left &&
-        x <= rect.right &&
-        y >= rect.top &&
-        y <= rect.bottom &&
-        rect.width > 60 &&
-        rect.height > 60 &&
-        window.getComputedStyle(video).visibility !== 'hidden' &&
-        window.getComputedStyle(video).display !== 'none'
-      ) {
-        return { video, rect };
+  // 1. Recursively find all <video> tags, even inside open Shadow Roots
+  function collectAllVideos(root = document) {
+    let videos = [];
+    try {
+      videos.push(...Array.from(root.querySelectorAll('video')));
+    } catch (_) {}
+
+    try {
+      const allEls = root.querySelectorAll('*');
+      for (const el of allEls) {
+        if (el.shadowRoot) {
+          videos.push(...collectAllVideos(el.shadowRoot));
+        }
+      }
+    } catch (_) {}
+    return videos;
+  }
+
+  // 2. Identify the active video target
+  function resolveTargetVideo(x, y) {
+    const videos = collectAllVideos();
+    if (!videos.length) return null;
+
+    // Direct hit test on video bounding box
+    for (const v of videos) {
+      const r = v.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return { video: v, rect: r };
       }
     }
+
+    // Hit test on player wrappers (JWPlayer, EV-Player, etc.)
+    for (const v of videos) {
+      const wrapper = v.closest('.jwplayer, [class*="player"], [id*="player"], .video-js') || v.parentElement;
+      if (wrapper) {
+        const r = wrapper.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          return { video: v, rect: r };
+        }
+      }
+    }
+
+    // If inside an iframe (like embedded EV-player/JWPlayer) with only 1 video:
+    if (window.self !== window.top && videos.length === 1) {
+      const v = videos[0];
+      return { video: v, rect: v.getBoundingClientRect() || document.body.getBoundingClientRect() };
+    }
+
+    // Fallback: Currently playing video
+    const playing = videos.find((v) => !v.paused);
+    if (playing) {
+      return { video: playing, rect: playing.getBoundingClientRect() };
+    }
+
     return null;
   }
 
-  // Display the iOS-style circular seek indicator
-  function showSeekOverlay(rect, isLeft, seconds) {
+  // 3. Render iOS-Style Overlay
+  function showOverlay(rect, isLeft, seconds) {
     const overlay = document.createElement('div');
     overlay.className = `vdt-overlay ${isLeft ? 'vdt-left' : 'vdt-right'}`;
 
-    // Position overlay over the tapped half of the video
-    overlay.style.top = `${rect.top}px`;
-    overlay.style.height = `${rect.height}px`;
-    overlay.style.width = `${rect.width / 2}px`;
-    overlay.style.left = isLeft ? `${rect.left}px` : `${rect.left + rect.width / 2}px`;
+    const host = document.fullscreenElement || document.webkitFullscreenElement || document.body;
 
-    const icon = document.createElement('div');
-    icon.className = 'vdt-bubble';
-    icon.innerHTML = `
-      <span class="vdt-arrow">${isLeft ? '◀◀' : '▶▶'}</span>
-      <span class="vdt-text">${seconds}s</span>
+    if (host !== document.body) {
+      // Fullscreen mode relative coordinates
+      overlay.style.top = '0px';
+      overlay.style.height = '100%';
+      overlay.style.width = '50%';
+      overlay.style.left = isLeft ? '0px' : '50%';
+    } else {
+      // Fixed viewport coordinates
+      overlay.style.top = `${rect.top}px`;
+      overlay.style.height = `${rect.height}px`;
+      overlay.style.width = `${rect.width / 2}px`;
+      overlay.style.left = isLeft ? `${rect.left}px` : `${rect.left + rect.width / 2}px`;
+    }
+
+    overlay.innerHTML = `
+      <div class="vdt-bubble">
+        <span class="vdt-arrow">${isLeft ? '◀◀' : '▶▶'}</span>
+        <span class="vdt-text">${seconds}s</span>
+      </div>
     `;
 
-    overlay.appendChild(icon);
-    document.body.appendChild(overlay);
-
+    host.appendChild(overlay);
     overlay.addEventListener('animationend', () => overlay.remove());
     setTimeout(() => { if (overlay.isConnected) overlay.remove(); }, 650);
   }
+
+  // 4. Capture & Neutralize synthetic click events generated by player overlays
+  window.addEventListener(
+    'click',
+    (e) => {
+      if (suppressNextClick) {
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        suppressNextClick = false;
+      }
+    },
+    true // Capture phase is critical
+  );
 
   window.addEventListener(
     'touchstart',
     (e) => {
       if (e.touches.length === 1) {
         const touch = e.touches[0];
-        touchStartData = {
-          x: touch.clientX,
-          y: touch.clientY,
-          time: Date.now()
-        };
+        touchStartData = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+
+        // Record playback state on initial touch
+        const target = resolveTargetVideo(touch.clientX, touch.clientY);
+        if (target && lastTap.time === 0) {
+          wasPlayingOnFirstTap = !target.video.paused;
+        }
       }
     },
     { capture: true, passive: true }
@@ -88,36 +145,50 @@
       const touch = e.changedTouches[0];
       const distX = Math.abs(touch.clientX - touchStartData.x);
       const distY = Math.abs(touch.clientY - touchStartData.y);
-      const duration = Date.now() - touchStartData.time;
+      const pressDuration = Date.now() - touchStartData.time;
 
-      // Ensure the gesture was a quick tap, not a drag or scroll
-      if (distX < 20 && distY < 20 && duration < 300) {
+      // Validate touch was a quick tap
+      if (distX < 25 && distY < 25 && pressDuration < 300) {
         const now = Date.now();
         const timeDiff = now - lastTap.time;
-        const tapDistance = Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y);
+        const tapDist = Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y);
 
-        if (timeDiff < 350 && tapDistance < 50) {
-          // Double-tap detected
-          const target = findVideoAtPoint(touch.clientX, touch.clientY);
+        if (timeDiff < 350 && tapDist < 60) {
+          // Double-tap confirmed!
+          const target = resolveTargetVideo(touch.clientX, touch.clientY);
           if (target) {
             const { video, rect } = target;
             const isLeft = (touch.clientX - rect.left) < (rect.width / 2);
             const delta = isLeft ? -seekSeconds : seekSeconds;
 
-            const durationCap = Number.isFinite(video.duration) ? video.duration : Infinity;
-            video.currentTime = Math.max(0, Math.min(durationCap, video.currentTime + delta));
+            // Execute Seek
+            try {
+              const cap = Number.isFinite(video.duration) ? video.duration : 1e6;
+              video.currentTime = Math.max(0, Math.min(cap, video.currentTime + delta));
+            } catch (_) {}
 
-            showSeekOverlay(rect, isLeft, seekSeconds);
+            showOverlay(rect, isLeft, seekSeconds);
 
-            // Reset tap state so a 3rd tap doesn't immediately re-seek
+            // Block player overlay from registering the 2nd tap as a pause/play/ad click
+            suppressNextClick = true;
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+
+            // If the 1st tap caused the embed to pause, restore playback
+            setTimeout(() => {
+              if (wasPlayingOnFirstTap && video.paused) {
+                video.play().catch(() => {});
+              }
+            }, 60);
+
             lastTap = { time: 0, x: 0, y: 0 };
             return;
           }
         }
-
         lastTap = { time: now, x: touch.clientX, y: touch.clientY };
       }
     },
-    { capture: true, passive: true }
+    { capture: true, passive: false }
   );
 })();
