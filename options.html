@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Double-Tap Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 20px;
+      margin: 0;
+      background: #f7f7f8;
+      color: #1a1a1a;
+    }
+    .card {
+      background: #fff;
+      padding: 18px;
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      max-width: 400px;
+      margin: auto;
+    }
+    h2 {
+      margin-top: 0;
+      font-size: 1.15rem;
+    }
+    .field {
+      margin: 18px 0;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.95rem;
+      font-weight: 500;
+    }
+    input[type="range"] {
+      width: 100%;
+      accent-color: #007aff;
+    }
+    .range-val {
+      font-weight: 700;
+      color: #007aff;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #007aff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    #status {
+      text-align: center;
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #28a745;
+      height: 1.2em;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Seek Settings</h2>
+    <div class="field">
+      <label>Seek Duration: <span id="valDisplay" class="range-val">10</span>s</label>
+      <input type="range" id="seekSeconds" min="3" max="30" step="1" value="10">
+    </div>
+    <button id="saveBtn">Save Settings</button>
+    <div id="status"></div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
